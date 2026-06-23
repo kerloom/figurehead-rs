@@ -229,4 +229,33 @@ mod tests {
         assert!(output.contains("Alice"));
         assert!(output.contains("Bob"));
     }
+
+    #[test]
+    fn test_render_er() {
+        let input = r#"erDiagram
+    PayGroup {
+        int Id PK
+        varchar Name
+        varchar CountryCode
+        varchar CurrencyCode
+        int PayFrequency
+    }
+
+    PayGroupUserMapping {
+        int Id PK
+        int PayGroupId FK
+        varchar UserId
+    }
+
+    PayGroup ||--o{ PayGroupUserMapping : "has users"
+    PayGroup ||--o{ PayGroupEmployeeMapping : "has employees""#;
+        let result = render(input);
+        assert!(result.is_ok(), "render failed: {:?}", result.err());
+        let output = result.unwrap();
+        assert!(output.contains("PayGroup"));
+        assert!(output.contains("PayGroupUserMapping"));
+        assert!(output.contains("||"));
+        assert!(output.contains("}o"));
+        assert!(output.contains("has users"));
+    }
 }
