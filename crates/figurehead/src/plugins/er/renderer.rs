@@ -5,7 +5,7 @@
 use anyhow::Result;
 use unicode_width::UnicodeWidthStr;
 
-use super::database::ErDatabase;
+use super::database::{Cardinality, ErDatabase};
 use super::layout::{ErLayoutAlgorithm, ErLayoutResult, PositionedEntity, PositionedRelationship};
 use crate::core::{AsciiCanvas, BoxChars, CharacterSet};
 
@@ -70,64 +70,98 @@ impl ErRenderer {
         canvas.set_char(x + w - 1, cy, chars.bottom_right);
     }
 
+    // --- Side-aware cardinality markers ---
+
+    /// Return the two characters of a cardinality marker, split for vertical
+    /// stacking.
+    fn marker_chars(card: Cardinality) -> (char, char) {
+        match card {
+            Cardinality::ExactlyOne => ('|', '|'),
+            Cardinality::ZeroOrOne => ('|', 'o'),
+            Cardinality::OneOrMore => ('}', '|'),
+            Cardinality::ZeroOrMore => ('}', 'o'),
+        }
+    }
+
     /// Draw the relationship line with cardinality markers at each end.
+    ///
+    /// For horizontal: canonical 2-char marker strings (e.g. `||`, `}o`).
+    /// For vertical: markers stacked vertically (one char per row).
     fn draw_relationship_line(&self, canvas: &mut AsciiCanvas, rel: &PositionedRelationship) {
         if rel.horizontal {
             let y = rel.from_y;
             let (left_x, right_x) = sort_pair(rel.from_x, rel.to_x);
 
-            for x in left_x..right_x {
+            // Draw the line, leaving 2 chars at each end for markers
+            let line_start = left_x + 2;
+            let line_end = right_x.saturating_sub(2);
+            for x in line_start..line_end {
                 canvas.set_char(x, y, '─');
             }
 
-            let (left_marker, right_marker) = if rel.from_x <= rel.to_x {
-                (
-                    rel.from_cardinality.to_marker(),
-                    rel.to_cardinality.to_marker(),
-                )
+            let (left_card, right_card) = if rel.from_x <= rel.to_x {
+                (rel.from_cardinality, rel.to_cardinality)
             } else {
-                (
-                    rel.to_cardinality.to_marker(),
-                    rel.from_cardinality.to_marker(),
-                )
+                (rel.to_cardinality, rel.from_cardinality)
             };
 
-            canvas.draw_text(left_x, y, left_marker);
-            canvas.draw_text(
-                right_x.saturating_sub(right_marker.chars().count()),
-                y,
-                right_marker,
-            );
+            canvas.draw_text(left_x, y, left_card.to_marker());
+            canvas.draw_text(right_x - 2, y, right_card.to_marker());
         } else {
             let x = rel.from_x;
             let (top_y, bottom_y) = sort_pair(rel.from_y, rel.to_y);
 
-            for y in top_y..bottom_y {
+            // Draw the line, leaving 2 rows at each end for markers
+            let line_start = top_y + 2;
+            let line_end = bottom_y.saturating_sub(2);
+            for y in line_start..line_end {
                 canvas.set_char(x, y, '│');
             }
 
-            let (top_marker, bottom_marker) = if rel.from_y <= rel.to_y {
-                (
-                    rel.from_cardinality.to_marker(),
-                    rel.to_cardinality.to_marker(),
-                )
+            let (top_card, bottom_card) = if rel.from_y <= rel.to_y {
+                (rel.from_cardinality, rel.to_cardinality)
             } else {
-                (
-                    rel.to_cardinality.to_marker(),
-                    rel.from_cardinality.to_marker(),
-                )
+                (rel.to_cardinality, rel.from_cardinality)
             };
 
-            canvas.draw_text(x.saturating_sub(1), top_y, top_marker);
-            canvas.draw_text(
-                x.saturating_sub(1),
-                bottom_y.saturating_sub(1),
-                bottom_marker,
-            );
+            // Stack marker chars vertically: first char on top, second below
+            let (t1, t2) = Self::marker_chars(top_card);
+            canvas.set_char(x, top_y, t1);
+            canvas.set_char(x, top_y + 1, t2);
+
+            let (b1, b2) = Self::marker_chars(bottom_card);
+            canvas.set_char(x, bottom_y - 2, b1);
+            canvas.set_char(x, bottom_y - 1, b2);
         }
     }
 
-    /// Draw the relationship label centered in the gap between markers.
+    // --- Label placement with collision avoidance ---
+
+    /// Check if all cells in a horizontal span are whitespace (or canvas
+    /// default).  Returns true if safe to draw.
+    fn is_clear_horizontal(canvas: &AsciiCanvas, x: usize, y: usize, len: usize) -> bool {
+        (0..len).all(|i| canvas.get_char(x + i, y) == ' ')
+    }
+
+    /// Draw a single-line label at (x, y) only if the target cells are
+    /// whitespace.  Falls back to y-1 or y+1 if blocked.
+    fn draw_label_safe(canvas: &mut AsciiCanvas, x: usize, y: usize, label: &str) {
+        let len = label.chars().count();
+        // Try the preferred row, then above, then below
+        for &try_y in &[y, y.saturating_sub(1), y + 1] {
+            if Self::is_clear_horizontal(canvas, x, try_y, len) {
+                canvas.draw_text(x, try_y, label);
+                return;
+            }
+        }
+        // Last resort: draw at the original position
+        canvas.draw_text(x, y, label);
+    }
+
+    /// Draw the relationship label in a reserved whitespace lane.
+    ///
+    /// For horizontal: above the connector line.
+    /// For vertical: to the right of the connector line.
     fn draw_relationship_label(&self, canvas: &mut AsciiCanvas, rel: &PositionedRelationship) {
         let Some(ref label) = rel.label else { return };
         if label.is_empty() {
@@ -137,13 +171,20 @@ impl ErRenderer {
         if rel.horizontal {
             let y = rel.from_y;
             let (left_x, right_x) = sort_pair(rel.from_x, rel.to_x);
-            let mid_x = (left_x + 2 + right_x.saturating_sub(2)) / 2;
-            canvas.draw_text(mid_x.saturating_sub(label.chars().count() / 2), y, label);
+            let label_len = label.chars().count();
+            // Center the label in the gap between markers (above the line)
+            let gap_start = left_x + 2;
+            let gap_end = right_x.saturating_sub(2);
+            let mid_x = (gap_start + gap_end) / 2;
+            let start_x = mid_x.saturating_sub(label_len / 2);
+            // Draw one row above the line
+            Self::draw_label_safe(canvas, start_x, y.saturating_sub(1), label);
         } else {
             let x = rel.from_x;
             let (top_y, bottom_y) = sort_pair(rel.from_y, rel.to_y);
             let mid_y = (top_y + bottom_y) / 2;
-            canvas.draw_text(x + 1, mid_y, label);
+            // Draw to the right of the line with a 1-char gap
+            Self::draw_label_safe(canvas, x + 2, mid_y, label);
         }
     }
 
@@ -153,12 +194,13 @@ impl ErRenderer {
             return Ok(String::new());
         }
 
+        // Extra space: 1 row above for labels, 1 below for vertical markers
         let extra = if layout.relationships.is_empty() {
             0
         } else {
-            2
+            3
         };
-        let mut canvas = AsciiCanvas::new(layout.width + 2, layout.height + extra + 1);
+        let mut canvas = AsciiCanvas::new(layout.width + 4, layout.height + extra + 1);
 
         for rel in &layout.relationships {
             self.draw_relationship_line(&mut canvas, rel);
@@ -282,5 +324,144 @@ mod tests {
         assert!(lines.len() >= 5);
         assert!(lines[0].starts_with('┌'));
         assert!(lines[lines.len() - 1].starts_with('└'));
+    }
+
+    // --- Side-aware marker tests ---
+
+    #[test]
+    fn test_marker_chars_exactly_one() {
+        assert_eq!(
+            ErRenderer::marker_chars(Cardinality::ExactlyOne),
+            ('|', '|')
+        );
+    }
+
+    #[test]
+    fn test_marker_chars_zero_or_one() {
+        assert_eq!(ErRenderer::marker_chars(Cardinality::ZeroOrOne), ('|', 'o'));
+    }
+
+    #[test]
+    fn test_marker_chars_one_or_more() {
+        assert_eq!(ErRenderer::marker_chars(Cardinality::OneOrMore), ('}', '|'));
+    }
+
+    #[test]
+    fn test_marker_chars_zero_or_more() {
+        assert_eq!(
+            ErRenderer::marker_chars(Cardinality::ZeroOrMore),
+            ('}', 'o')
+        );
+    }
+
+    #[test]
+    fn test_render_vertical_marker_stacked() {
+        let mut db = ErDatabase::new();
+        db.add_entity(Entity::new("A")).unwrap();
+        db.add_entity(Entity::new("B")).unwrap();
+        db.add_entity(Entity::new("C")).unwrap();
+        // A and C are on different rows (2-per-row layout)
+        db.add_relationship(Relationship::new(
+            "A",
+            "C",
+            Cardinality::ExactlyOne,
+            Cardinality::ZeroOrMore,
+        ))
+        .unwrap();
+
+        let result = ErRenderer::new().render_database(&db).unwrap();
+        // Vertical markers should be stacked (one char per row), not side by side
+        let lines: Vec<&str> = result.lines().collect();
+        let mut found_stacked = false;
+        for x in 0..lines.iter().map(|l| l.len()).max().unwrap_or(0) {
+            for i in 0..lines.len().saturating_sub(1) {
+                let c1 = lines[i].chars().nth(x);
+                let c2 = lines[i + 1].chars().nth(x);
+                if c1 == Some('|') && c2 == Some('|') {
+                    found_stacked = true;
+                }
+            }
+        }
+        assert!(found_stacked, "Expected stacked vertical || marker");
+    }
+
+    // --- Label lane tests ---
+
+    #[test]
+    fn test_horizontal_label_above_line() {
+        let mut db = ErDatabase::new();
+        db.add_entity(Entity::new("A")).unwrap();
+        db.add_entity(Entity::new("B")).unwrap();
+        db.add_relationship(
+            Relationship::new("A", "B", Cardinality::ExactlyOne, Cardinality::ZeroOrMore)
+                .with_label("rel"),
+        )
+        .unwrap();
+
+        let result = ErRenderer::new().render_database(&db).unwrap();
+        let lines: Vec<&str> = result.lines().collect();
+        // Find the row with "rel"
+        let rel_row = lines.iter().position(|l| l.contains("rel"));
+        assert!(rel_row.is_some(), "Label 'rel' should appear in output");
+        let rel_row = rel_row.unwrap();
+        // The row below should contain the connector line (─)
+        if rel_row + 1 < lines.len() {
+            assert!(
+                lines[rel_row + 1].contains('─'),
+                "Connector line should be below the label"
+            );
+        }
+    }
+
+    #[test]
+    fn test_vertical_label_beside_line() {
+        let mut db = ErDatabase::new();
+        db.add_entity(Entity::new("A")).unwrap();
+        db.add_entity(Entity::new("B")).unwrap();
+        db.add_entity(Entity::new("C")).unwrap();
+        db.add_entity(Entity::new("D")).unwrap();
+        db.add_relationship(
+            Relationship::new("A", "C", Cardinality::ExactlyOne, Cardinality::ZeroOrMore)
+                .with_label("rel"),
+        )
+        .unwrap();
+
+        let result = ErRenderer::new().render_database(&db).unwrap();
+        assert!(result.contains("rel"));
+    }
+
+    // --- Collision avoidance test ---
+
+    #[test]
+    fn test_label_does_not_overwrite_entity() {
+        let mut db = ErDatabase::new();
+        let mut e = Entity::new("Short");
+        e.add_attribute(Attribute::new("Id", "int").with_key(KeyKind::Pk));
+        db.add_entity(e).unwrap();
+        db.add_entity(Entity::new("B")).unwrap();
+        db.add_relationship(
+            Relationship::new(
+                "Short",
+                "B",
+                Cardinality::ExactlyOne,
+                Cardinality::ZeroOrMore,
+            )
+            .with_label("rel"),
+        )
+        .unwrap();
+
+        let result = ErRenderer::new().render_database(&db).unwrap();
+        // The label "rel" should appear, and "int Id PK" should still be intact
+        assert!(result.contains("int Id PK"));
+        assert!(result.contains("rel"));
+    }
+
+    #[test]
+    fn test_is_clear_horizontal() {
+        let mut canvas = AsciiCanvas::new(10, 3);
+        assert!(ErRenderer::is_clear_horizontal(&canvas, 0, 0, 5));
+        canvas.set_char(2, 0, 'X');
+        assert!(!ErRenderer::is_clear_horizontal(&canvas, 0, 0, 5));
+        assert!(ErRenderer::is_clear_horizontal(&canvas, 3, 0, 5));
     }
 }
