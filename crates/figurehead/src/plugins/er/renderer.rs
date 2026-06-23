@@ -6,7 +6,9 @@ use anyhow::Result;
 use unicode_width::UnicodeWidthStr;
 
 use super::database::{Cardinality, ErDatabase};
-use super::layout::{ErLayoutAlgorithm, ErLayoutResult, PositionedEntity, PositionedRelationship};
+use super::layout::{
+    ErLayoutAlgorithm, ErLayoutResult, Point, PortSide, PositionedEntity, PositionedRelationship,
+};
 use crate::core::{AsciiCanvas, BoxChars, CharacterSet};
 
 /// ER diagram renderer.
@@ -84,54 +86,89 @@ impl ErRenderer {
     }
 
     /// Draw the relationship line with cardinality markers at each end.
-    ///
-    /// For horizontal: canonical 2-char marker strings (e.g. `||`, `}o`).
-    /// For vertical: markers stacked vertically (one char per row).
     fn draw_relationship_line(&self, canvas: &mut AsciiCanvas, rel: &PositionedRelationship) {
-        if rel.horizontal {
-            let y = rel.from_y;
-            let (left_x, right_x) = sort_pair(rel.from_x, rel.to_x);
+        for pair in rel.route.windows(2) {
+            Self::draw_segment(canvas, pair[0], pair[1]);
+        }
 
-            // Draw the line, leaving 2 chars at each end for markers
-            let line_start = left_x + 2;
-            let line_end = right_x.saturating_sub(2);
-            for x in line_start..line_end {
-                canvas.set_char(x, y, '─');
+        for triple in rel.route.windows(3) {
+            let c = Self::corner_char(triple[0], triple[1], triple[2]);
+            canvas.set_char(triple[1].x, triple[1].y, c);
+        }
+
+        Self::draw_marker(canvas, rel.route[0], rel.from_side, rel.from_cardinality);
+        Self::draw_marker(
+            canvas,
+            *rel.route.last().unwrap(),
+            rel.to_side,
+            rel.to_cardinality,
+        );
+    }
+
+    fn draw_segment(canvas: &mut AsciiCanvas, from: Point, to: Point) {
+        if from.y == to.y {
+            let (left, right) = sort_pair(from.x, to.x);
+            for x in left..=right {
+                Self::set_line_char(canvas, x, from.y, '─');
             }
-
-            let (left_card, right_card) = if rel.from_x <= rel.to_x {
-                (rel.from_cardinality, rel.to_cardinality)
-            } else {
-                (rel.to_cardinality, rel.from_cardinality)
-            };
-
-            canvas.draw_text(left_x, y, left_card.to_marker());
-            canvas.draw_text(right_x - 2, y, right_card.to_marker());
-        } else {
-            let x = rel.from_x;
-            let (top_y, bottom_y) = sort_pair(rel.from_y, rel.to_y);
-
-            // Draw the line, leaving 2 rows at each end for markers
-            let line_start = top_y + 2;
-            let line_end = bottom_y.saturating_sub(2);
-            for y in line_start..line_end {
-                canvas.set_char(x, y, '│');
+        } else if from.x == to.x {
+            let (top, bottom) = sort_pair(from.y, to.y);
+            for y in top..=bottom {
+                Self::set_line_char(canvas, from.x, y, '│');
             }
+        }
+    }
 
-            let (top_card, bottom_card) = if rel.from_y <= rel.to_y {
-                (rel.from_cardinality, rel.to_cardinality)
-            } else {
-                (rel.to_cardinality, rel.from_cardinality)
-            };
+    fn set_line_char(canvas: &mut AsciiCanvas, x: usize, y: usize, c: char) {
+        let existing = canvas.get_char(x, y);
+        if existing == ' ' || existing == c {
+            canvas.set_char(x, y, c);
+        } else if matches!(
+            existing,
+            '─' | '│' | '┌' | '┐' | '└' | '┘' | '┬' | '┴' | '├' | '┤' | '┼'
+        ) {
+            canvas.set_char(x, y, '┼');
+        }
+    }
 
-            // Stack marker chars vertically: first char on top, second below
-            let (t1, t2) = Self::marker_chars(top_card);
-            canvas.set_char(x, top_y, t1);
-            canvas.set_char(x, top_y + 1, t2);
+    fn corner_char(prev: Point, curr: Point, next: Point) -> char {
+        let left = prev.x < curr.x || next.x < curr.x;
+        let right = prev.x > curr.x || next.x > curr.x;
+        let up = prev.y < curr.y || next.y < curr.y;
+        let down = prev.y > curr.y || next.y > curr.y;
 
-            let (b1, b2) = Self::marker_chars(bottom_card);
-            canvas.set_char(x, bottom_y - 2, b1);
-            canvas.set_char(x, bottom_y - 1, b2);
+        match (left, right, up, down) {
+            (true, true, true, true) => '┼',
+            (true, true, true, false) => '┴',
+            (true, true, false, true) => '┬',
+            (true, false, true, true) => '┤',
+            (false, true, true, true) => '├',
+            (false, true, false, true) => '┌',
+            (true, false, false, true) => '┐',
+            (false, true, true, false) => '└',
+            (true, false, true, false) => '┘',
+            (true, true, false, false) => '─',
+            (false, false, true, true) => '│',
+            _ => '┼',
+        }
+    }
+
+    fn draw_marker(canvas: &mut AsciiCanvas, point: Point, side: PortSide, card: Cardinality) {
+        match side {
+            PortSide::Left => {
+                canvas.draw_text(point.x.saturating_sub(1), point.y, card.to_marker())
+            }
+            PortSide::Right => canvas.draw_text(point.x, point.y, card.to_marker()),
+            PortSide::Top => {
+                let (a, b) = Self::marker_chars(card);
+                canvas.set_char(point.x, point.y.saturating_sub(1), a);
+                canvas.set_char(point.x, point.y, b);
+            }
+            PortSide::Bottom => {
+                let (a, b) = Self::marker_chars(card);
+                canvas.set_char(point.x, point.y, a);
+                canvas.set_char(point.x, point.y + 1, b);
+            }
         }
     }
 
@@ -168,24 +205,34 @@ impl ErRenderer {
             return;
         }
 
-        if rel.horizontal {
-            let y = rel.from_y;
-            let (left_x, right_x) = sort_pair(rel.from_x, rel.to_x);
+        let Some((from, to)) = Self::longest_segment(rel) else {
+            return;
+        };
+
+        if from.y == to.y {
+            let y = from.y;
+            let (left_x, right_x) = sort_pair(from.x, to.x);
             let label_len = label.chars().count();
-            // Center the label in the gap between markers (above the line)
-            let gap_start = left_x + 2;
-            let gap_end = right_x.saturating_sub(2);
-            let mid_x = (gap_start + gap_end) / 2;
+            let mid_x = (left_x + right_x) / 2;
             let start_x = mid_x.saturating_sub(label_len / 2);
-            // Draw one row above the line
             Self::draw_label_safe(canvas, start_x, y.saturating_sub(1), label);
         } else {
-            let x = rel.from_x;
-            let (top_y, bottom_y) = sort_pair(rel.from_y, rel.to_y);
+            let x = from.x;
+            let (top_y, bottom_y) = sort_pair(from.y, to.y);
             let mid_y = (top_y + bottom_y) / 2;
-            // Draw to the right of the line with a 1-char gap
             Self::draw_label_safe(canvas, x + 2, mid_y, label);
         }
+    }
+
+    fn longest_segment(rel: &PositionedRelationship) -> Option<(Point, Point)> {
+        rel.route
+            .windows(2)
+            .map(|pair| {
+                let len = pair[0].x.abs_diff(pair[1].x) + pair[0].y.abs_diff(pair[1].y);
+                (len, pair[0], pair[1])
+            })
+            .max_by_key(|(len, _, _)| *len)
+            .map(|(_, from, to)| (from, to))
     }
 
     /// Render the layout to ASCII art.
@@ -428,6 +475,29 @@ mod tests {
 
         let result = ErRenderer::new().render_database(&db).unwrap();
         assert!(result.contains("rel"));
+    }
+
+    #[test]
+    fn test_non_aligned_relationship_draws_corner() {
+        let mut db = ErDatabase::new();
+        db.add_entity(Entity::new("A")).unwrap();
+        db.add_entity(Entity::new("B")).unwrap();
+        db.add_entity(Entity::new("C")).unwrap();
+        db.add_entity(Entity::new("D")).unwrap();
+        db.add_relationship(
+            Relationship::new("A", "D", Cardinality::ExactlyOne, Cardinality::ZeroOrMore)
+                .with_label("rel"),
+        )
+        .unwrap();
+
+        let result = ErRenderer::new().render_database(&db).unwrap();
+        assert!(
+            result.contains('┌')
+                || result.contains('┐')
+                || result.contains('└')
+                || result.contains('┘'),
+            "expected an orthogonal route with a corner, got:\n{result}"
+        );
     }
 
     // --- Collision avoidance test ---

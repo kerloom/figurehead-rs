@@ -7,6 +7,28 @@ use unicode_width::UnicodeWidthStr;
 
 use super::database::{Cardinality, Entity, ErDatabase};
 
+/// A point in canvas coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Point {
+    pub x: usize,
+    pub y: usize,
+}
+
+impl Point {
+    fn new(x: usize, y: usize) -> Self {
+        Self { x, y }
+    }
+}
+
+/// Side of an entity box used as a connector port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortSide {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
 /// Positioned entity box for rendering.
 #[derive(Debug, Clone)]
 pub struct PositionedEntity {
@@ -31,6 +53,9 @@ pub struct PositionedRelationship {
     pub to_x: usize,
     pub to_y: usize,
     pub horizontal: bool,
+    pub from_side: PortSide,
+    pub to_side: PortSide,
+    pub route: Vec<Point>,
 }
 
 /// Layout result containing all positioned elements.
@@ -193,24 +218,11 @@ impl ErLayoutAlgorithm {
             let to = positioned.iter().find(|e| e.name == rel.to);
 
             if let (Some(from), Some(to)) = (from, to) {
-                let same_row = from.y == to.y;
-                let (from_x, from_y, to_x, to_y, horizontal) = if same_row {
-                    let (left, right) = if from.x <= to.x {
-                        (from, to)
-                    } else {
-                        (to, from)
-                    };
-                    let y = left.y + left.height / 2;
-                    (left.x + left.width, y, right.x, y, true)
-                } else {
-                    let (top, bottom) = if from.y <= to.y {
-                        (from, to)
-                    } else {
-                        (to, from)
-                    };
-                    let x = top.x + top.width / 2;
-                    (x, top.y + top.height, x, bottom.y, false)
-                };
+                let (from_side, to_side) = Self::choose_ports(from, to);
+                let from_port = Self::port_point(from, from_side);
+                let to_port = Self::port_point(to, to_side);
+                let route = Self::orthogonal_route(from_port, from_side, to_port, to_side);
+                let horizontal = route.len() == 2 && from_port.y == to_port.y;
 
                 positioned_rels.push(PositionedRelationship {
                     from_entity: rel.from.clone(),
@@ -218,11 +230,14 @@ impl ErLayoutAlgorithm {
                     from_cardinality: rel.from_cardinality,
                     to_cardinality: rel.to_cardinality,
                     label: rel.label.clone(),
-                    from_x,
-                    from_y,
-                    to_x,
-                    to_y,
+                    from_x: from_port.x,
+                    from_y: from_port.y,
+                    to_x: to_port.x,
+                    to_y: to_port.y,
                     horizontal,
+                    from_side,
+                    to_side,
+                    route,
                 });
             }
         }
@@ -233,6 +248,66 @@ impl ErLayoutAlgorithm {
             width: total_width,
             height: total_height,
         })
+    }
+
+    fn choose_ports(from: &PositionedEntity, to: &PositionedEntity) -> (PortSide, PortSide) {
+        let from_cx = from.x + from.width / 2;
+        let from_cy = from.y + from.height / 2;
+        let to_cx = to.x + to.width / 2;
+        let to_cy = to.y + to.height / 2;
+
+        let dx = to_cx as isize - from_cx as isize;
+        let dy = to_cy as isize - from_cy as isize;
+
+        if dx.abs() >= dy.abs() {
+            if dx >= 0 {
+                (PortSide::Right, PortSide::Left)
+            } else {
+                (PortSide::Left, PortSide::Right)
+            }
+        } else if dy >= 0 {
+            (PortSide::Bottom, PortSide::Top)
+        } else {
+            (PortSide::Top, PortSide::Bottom)
+        }
+    }
+
+    fn port_point(entity: &PositionedEntity, side: PortSide) -> Point {
+        let mid_x = entity.x + entity.width / 2;
+        let mid_y = entity.y + entity.height / 2;
+
+        match side {
+            PortSide::Left => Point::new(entity.x.saturating_sub(1), mid_y),
+            PortSide::Right => Point::new(entity.x + entity.width, mid_y),
+            PortSide::Top => Point::new(mid_x, entity.y.saturating_sub(1)),
+            PortSide::Bottom => Point::new(mid_x, entity.y + entity.height),
+        }
+    }
+
+    fn orthogonal_route(
+        from: Point,
+        from_side: PortSide,
+        to: Point,
+        to_side: PortSide,
+    ) -> Vec<Point> {
+        if from.x == to.x || from.y == to.y {
+            return vec![from, to];
+        }
+
+        let from_horizontal = matches!(from_side, PortSide::Left | PortSide::Right);
+        let to_horizontal = matches!(to_side, PortSide::Left | PortSide::Right);
+
+        if from_horizontal && to_horizontal {
+            let mid_x = (from.x + to.x) / 2;
+            vec![from, Point::new(mid_x, from.y), Point::new(mid_x, to.y), to]
+        } else if !from_horizontal && !to_horizontal {
+            let mid_y = (from.y + to.y) / 2;
+            vec![from, Point::new(from.x, mid_y), Point::new(to.x, mid_y), to]
+        } else if from_horizontal {
+            vec![from, Point::new(to.x, from.y), to]
+        } else {
+            vec![from, Point::new(from.x, to.y), to]
+        }
     }
 }
 
@@ -316,6 +391,63 @@ mod tests {
 
         assert_eq!(result.relationships.len(), 1);
         assert!(result.relationships[0].horizontal);
+        assert_eq!(result.relationships[0].from_side, PortSide::Right);
+        assert_eq!(result.relationships[0].to_side, PortSide::Left);
+        assert_eq!(result.relationships[0].route.len(), 2);
+    }
+
+    #[test]
+    fn test_relationship_positioning_vertical_ports() {
+        let mut db = ErDatabase::new();
+        db.add_entity(Entity::new("A")).unwrap();
+        db.add_entity(Entity::new("B")).unwrap();
+        db.add_entity(Entity::new("C")).unwrap();
+        db.add_relationship(Relationship::new(
+            "A",
+            "C",
+            Cardinality::ExactlyOne,
+            Cardinality::ZeroOrMore,
+        ))
+        .unwrap();
+
+        let layout = ErLayoutAlgorithm::new();
+        let result = layout.layout(&db).unwrap();
+        let rel = &result.relationships[0];
+
+        assert_eq!(rel.from_side, PortSide::Bottom);
+        assert_eq!(rel.to_side, PortSide::Top);
+        assert_eq!(rel.route.len(), 2);
+    }
+
+    #[test]
+    fn test_relationship_non_aligned_route_has_waypoints() {
+        let mut db = ErDatabase::new();
+        db.add_entity(Entity::new("A")).unwrap();
+        db.add_entity(Entity::new("B")).unwrap();
+        db.add_entity(Entity::new("C")).unwrap();
+        db.add_entity(Entity::new("D")).unwrap();
+        db.add_relationship(Relationship::new(
+            "A",
+            "D",
+            Cardinality::ExactlyOne,
+            Cardinality::ZeroOrMore,
+        ))
+        .unwrap();
+
+        let layout = ErLayoutAlgorithm::new();
+        let result = layout.layout(&db).unwrap();
+        let rel = &result.relationships[0];
+
+        assert!(
+            rel.route.len() > 2,
+            "non-aligned route should use waypoints"
+        );
+        for pair in rel.route.windows(2) {
+            assert!(
+                pair[0].x == pair[1].x || pair[0].y == pair[1].y,
+                "each route segment must be orthogonal"
+            );
+        }
     }
 
     #[test]
