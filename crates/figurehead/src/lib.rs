@@ -255,7 +255,7 @@ mod tests {
         assert!(output.contains("PayGroup"));
         assert!(output.contains("PayGroupUserMapping"));
         assert!(output.contains("||"));
-        assert!(output.contains("}o"));
+        assert!(output.contains("o{"));
         assert!(output.contains("has users"));
     }
 }

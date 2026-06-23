@@ -74,14 +74,18 @@ impl ErRenderer {
 
     // --- Side-aware cardinality markers ---
 
-    /// Return the two characters of a cardinality marker, split for vertical
-    /// stacking.
-    fn marker_chars(card: Cardinality) -> (char, char) {
-        match card {
-            Cardinality::ExactlyOne => ('|', '|'),
-            Cardinality::ZeroOrOne => ('|', 'o'),
-            Cardinality::OneOrMore => ('}', '|'),
-            Cardinality::ZeroOrMore => ('}', 'o'),
+    /// Return a side-aware marker string. Left/top ports are visually mirrored
+    /// so markers face the entity box (`o{` instead of canonical `}o`).
+    fn marker_for_side(card: Cardinality, side: PortSide) -> &'static str {
+        let mirror = matches!(side, PortSide::Left | PortSide::Top);
+        match (card, mirror) {
+            (Cardinality::ExactlyOne, _) => "||",
+            (Cardinality::ZeroOrOne, false) => "|o",
+            (Cardinality::ZeroOrOne, true) => "o|",
+            (Cardinality::OneOrMore, false) => "}|",
+            (Cardinality::OneOrMore, true) => "|{",
+            (Cardinality::ZeroOrMore, false) => "}o",
+            (Cardinality::ZeroOrMore, true) => "o{",
         }
     }
 
@@ -154,45 +158,42 @@ impl ErRenderer {
     }
 
     fn draw_marker(canvas: &mut AsciiCanvas, point: Point, side: PortSide, card: Cardinality) {
+        let marker = Self::marker_for_side(card, side);
         match side {
-            PortSide::Left => {
-                canvas.draw_text(point.x.saturating_sub(1), point.y, card.to_marker())
-            }
-            PortSide::Right => canvas.draw_text(point.x, point.y, card.to_marker()),
-            PortSide::Top => {
-                let (a, b) = Self::marker_chars(card);
-                canvas.set_char(point.x, point.y.saturating_sub(1), a);
-                canvas.set_char(point.x, point.y, b);
-            }
-            PortSide::Bottom => {
-                let (a, b) = Self::marker_chars(card);
-                canvas.set_char(point.x, point.y, a);
-                canvas.set_char(point.x, point.y + 1, b);
+            PortSide::Left => canvas.draw_text(point.x.saturating_sub(2), point.y, marker),
+            PortSide::Right => canvas.draw_text(point.x, point.y, marker),
+            PortSide::Top | PortSide::Bottom => {
+                canvas.draw_text(point.x.saturating_sub(1), point.y, marker)
             }
         }
     }
 
     // --- Label placement with collision avoidance ---
 
-    /// Check if all cells in a horizontal span are whitespace (or canvas
-    /// default).  Returns true if safe to draw.
-    fn is_clear_horizontal(canvas: &AsciiCanvas, x: usize, y: usize, len: usize) -> bool {
-        (0..len).all(|i| canvas.get_char(x + i, y) == ' ')
+    /// Check if all cells in a horizontal span are safe for a label.
+    fn is_clear_horizontal(
+        canvas: &AsciiCanvas,
+        x: usize,
+        y: usize,
+        len: usize,
+        allow_line: bool,
+    ) -> bool {
+        (0..len).all(|i| {
+            let c = canvas.get_char(x + i, y);
+            c == ' ' || (allow_line && c == '─')
+        })
     }
 
-    /// Draw a single-line label at (x, y) only if the target cells are
-    /// whitespace.  Falls back to y-1 or y+1 if blocked.
-    fn draw_label_safe(canvas: &mut AsciiCanvas, x: usize, y: usize, label: &str) {
+    /// Draw a single-line label only if target cells are safe. Never overwrites
+    /// entity content; if all candidates are blocked, the label is skipped.
+    fn draw_label_safe(canvas: &mut AsciiCanvas, candidates: &[(usize, usize, bool)], label: &str) {
         let len = label.chars().count();
-        // Try the preferred row, then above, then below
-        for &try_y in &[y, y.saturating_sub(1), y + 1] {
-            if Self::is_clear_horizontal(canvas, x, try_y, len) {
-                canvas.draw_text(x, try_y, label);
+        for &(x, y, allow_line) in candidates {
+            if Self::is_clear_horizontal(canvas, x, y, len, allow_line) {
+                canvas.draw_text(x, y, label);
                 return;
             }
         }
-        // Last resort: draw at the original position
-        canvas.draw_text(x, y, label);
     }
 
     /// Draw the relationship label in a reserved whitespace lane.
@@ -215,12 +216,30 @@ impl ErRenderer {
             let label_len = label.chars().count();
             let mid_x = (left_x + right_x) / 2;
             let start_x = mid_x.saturating_sub(label_len / 2);
-            Self::draw_label_safe(canvas, start_x, y.saturating_sub(1), label);
+            Self::draw_label_safe(
+                canvas,
+                &[
+                    (start_x, y.saturating_sub(1), false),
+                    (start_x, y, true),
+                    (start_x, y + 1, false),
+                ],
+                label,
+            );
         } else {
             let x = from.x;
             let (top_y, bottom_y) = sort_pair(from.y, to.y);
             let mid_y = (top_y + bottom_y) / 2;
-            Self::draw_label_safe(canvas, x + 2, mid_y, label);
+            let label_len = label.chars().count();
+            Self::draw_label_safe(
+                canvas,
+                &[
+                    (x + 2, mid_y, false),
+                    (x + 2, mid_y.saturating_sub(1), false),
+                    (x + 2, mid_y + 1, false),
+                    (x.saturating_sub(label_len + 2), mid_y, false),
+                ],
+                label,
+            );
         }
     }
 
@@ -340,7 +359,7 @@ mod tests {
 
         let result = ErRenderer::new().render_database(&db).unwrap();
         assert!(result.contains("||"));
-        assert!(result.contains("}o"));
+        assert!(result.contains("o{"));
         assert!(result.contains("has users"));
     }
 
@@ -376,33 +395,55 @@ mod tests {
     // --- Side-aware marker tests ---
 
     #[test]
-    fn test_marker_chars_exactly_one() {
+    fn test_marker_for_side_exactly_one() {
         assert_eq!(
-            ErRenderer::marker_chars(Cardinality::ExactlyOne),
-            ('|', '|')
+            ErRenderer::marker_for_side(Cardinality::ExactlyOne, PortSide::Right),
+            "||"
         );
     }
 
     #[test]
-    fn test_marker_chars_zero_or_one() {
-        assert_eq!(ErRenderer::marker_chars(Cardinality::ZeroOrOne), ('|', 'o'));
-    }
-
-    #[test]
-    fn test_marker_chars_one_or_more() {
-        assert_eq!(ErRenderer::marker_chars(Cardinality::OneOrMore), ('}', '|'));
-    }
-
-    #[test]
-    fn test_marker_chars_zero_or_more() {
+    fn test_marker_for_side_zero_or_one() {
         assert_eq!(
-            ErRenderer::marker_chars(Cardinality::ZeroOrMore),
-            ('}', 'o')
+            ErRenderer::marker_for_side(Cardinality::ZeroOrOne, PortSide::Right),
+            "|o"
+        );
+        assert_eq!(
+            ErRenderer::marker_for_side(Cardinality::ZeroOrOne, PortSide::Left),
+            "o|"
         );
     }
 
     #[test]
-    fn test_render_vertical_marker_stacked() {
+    fn test_marker_for_side_one_or_more() {
+        assert_eq!(
+            ErRenderer::marker_for_side(Cardinality::OneOrMore, PortSide::Right),
+            "}|"
+        );
+        assert_eq!(
+            ErRenderer::marker_for_side(Cardinality::OneOrMore, PortSide::Top),
+            "|{"
+        );
+    }
+
+    #[test]
+    fn test_marker_for_side_zero_or_more() {
+        assert_eq!(
+            ErRenderer::marker_for_side(Cardinality::ZeroOrMore, PortSide::Right),
+            "}o"
+        );
+        assert_eq!(
+            ErRenderer::marker_for_side(Cardinality::ZeroOrMore, PortSide::Bottom),
+            "}o"
+        );
+        assert_eq!(
+            ErRenderer::marker_for_side(Cardinality::ZeroOrMore, PortSide::Left),
+            "o{"
+        );
+    }
+
+    #[test]
+    fn test_render_vertical_marker_side_by_side() {
         let mut db = ErDatabase::new();
         db.add_entity(Entity::new("A")).unwrap();
         db.add_entity(Entity::new("B")).unwrap();
@@ -417,19 +458,10 @@ mod tests {
         .unwrap();
 
         let result = ErRenderer::new().render_database(&db).unwrap();
-        // Vertical markers should be stacked (one char per row), not side by side
-        let lines: Vec<&str> = result.lines().collect();
-        let mut found_stacked = false;
-        for x in 0..lines.iter().map(|l| l.len()).max().unwrap_or(0) {
-            for i in 0..lines.len().saturating_sub(1) {
-                let c1 = lines[i].chars().nth(x);
-                let c2 = lines[i + 1].chars().nth(x);
-                if c1 == Some('|') && c2 == Some('|') {
-                    found_stacked = true;
-                }
-            }
-        }
-        assert!(found_stacked, "Expected stacked vertical || marker");
+        assert!(
+            result.contains("||") || result.contains("}o"),
+            "Expected side-by-side vertical port markers, got:\n{result}"
+        );
     }
 
     // --- Label lane tests ---
@@ -529,9 +561,12 @@ mod tests {
     #[test]
     fn test_is_clear_horizontal() {
         let mut canvas = AsciiCanvas::new(10, 3);
-        assert!(ErRenderer::is_clear_horizontal(&canvas, 0, 0, 5));
+        assert!(ErRenderer::is_clear_horizontal(&canvas, 0, 0, 5, false));
         canvas.set_char(2, 0, 'X');
-        assert!(!ErRenderer::is_clear_horizontal(&canvas, 0, 0, 5));
-        assert!(ErRenderer::is_clear_horizontal(&canvas, 3, 0, 5));
+        assert!(!ErRenderer::is_clear_horizontal(&canvas, 0, 0, 5, false));
+        assert!(ErRenderer::is_clear_horizontal(&canvas, 3, 0, 5, false));
+        canvas.set_char(4, 0, '─');
+        assert!(!ErRenderer::is_clear_horizontal(&canvas, 3, 0, 5, false));
+        assert!(ErRenderer::is_clear_horizontal(&canvas, 3, 0, 5, true));
     }
 }

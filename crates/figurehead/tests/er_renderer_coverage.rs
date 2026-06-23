@@ -35,7 +35,7 @@ fn test_render_payments_fixture() {
     assert!(output.contains("PayGroupUserMapping"));
     assert!(output.contains("PayGroupEmployeeMapping"));
     assert!(output.contains("||"));
-    assert!(output.contains("}o"));
+    assert!(output.contains("o{"));
     assert!(output.contains("has users"));
     assert!(output.contains("has employees"));
 }
@@ -103,7 +103,7 @@ fn test_render_comments_ignored() {
     assert!(result.is_ok(), "render failed: {:?}", result.err());
     let output = result.unwrap();
     assert!(output.contains("A"));
-    assert!(output.contains("}o"));
+    assert!(output.contains("o{"));
 }
 
 #[test]
@@ -206,7 +206,7 @@ fn test_render_direction_ignored() {
     assert!(result.is_ok(), "render failed: {:?}", result.err());
     let output = result.unwrap();
     assert!(output.contains("A"));
-    assert!(output.contains("}o"));
+    assert!(output.contains("o{"));
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn test_render_cardinality_words() {
     assert!(result.is_ok(), "render failed: {:?}", result.err());
     let output = result.unwrap();
     assert!(output.contains("}|"));
-    assert!(output.contains("}o"));
+    assert!(output.contains("o{"));
 }
 
 #[test]
@@ -279,5 +279,5 @@ fn test_render_class_apply_ignored() {
     assert!(result.is_ok(), "render failed: {:?}", result.err());
     let output = result.unwrap();
     assert!(output.contains("A"));
-    assert!(output.contains("}o"));
+    assert!(output.contains("o{"));
 }
