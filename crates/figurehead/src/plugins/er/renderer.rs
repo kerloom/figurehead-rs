@@ -17,6 +17,8 @@ pub struct ErRenderer;
 #[derive(Debug, Clone, Copy, Default)]
 struct LineCell {
     directions: u8,
+    route: Option<usize>,
+    multiple_routes: bool,
 }
 
 impl LineCell {
@@ -25,12 +27,24 @@ impl LineCell {
     const UP: u8 = 0b0100;
     const DOWN: u8 = 0b1000;
 
-    fn connect(&mut self, direction: u8) {
+    fn connect(&mut self, direction: u8, route_index: usize) {
         self.directions |= direction;
+        match self.route {
+            Some(existing) if existing != route_index => self.multiple_routes = true,
+            Some(_) => {}
+            None => self.route = Some(route_index),
+        }
     }
 
     fn to_char(self) -> Option<char> {
         let d = self.directions;
+        let has_horizontal = d & (Self::LEFT | Self::RIGHT) != 0;
+        let has_vertical = d & (Self::UP | Self::DOWN) != 0;
+
+        if self.multiple_routes && has_horizontal && has_vertical {
+            return Some(' ');
+        }
+
         match d {
             0 => None,
             d if d == (Self::LEFT | Self::RIGHT | Self::UP | Self::DOWN) => Some('┼'),
@@ -84,27 +98,27 @@ impl LineGrid {
         }
     }
 
-    fn connect(&mut self, point: Point, direction: u8) {
+    fn connect(&mut self, point: Point, direction: u8, route_index: usize) {
         self.ensure_size(point.x + 1, point.y + 1);
-        self.cells[point.y][point.x].connect(direction);
+        self.cells[point.y][point.x].connect(direction, route_index);
     }
 
-    fn add_route(&mut self, route: &[Point]) {
+    fn add_route(&mut self, route_index: usize, route: &[Point]) {
         for pair in route.windows(2) {
-            self.add_segment(pair[0], pair[1]);
+            self.add_segment(route_index, pair[0], pair[1]);
         }
     }
 
-    fn add_segment(&mut self, from: Point, to: Point) {
+    fn add_segment(&mut self, route_index: usize, from: Point, to: Point) {
         if from.y == to.y {
             let (left, right) = sort_pair(from.x, to.x);
             for x in left..=right {
                 let point = Point { x, y: from.y };
                 if x > left {
-                    self.connect(point, LineCell::LEFT);
+                    self.connect(point, LineCell::LEFT, route_index);
                 }
                 if x < right {
-                    self.connect(point, LineCell::RIGHT);
+                    self.connect(point, LineCell::RIGHT, route_index);
                 }
             }
         } else if from.x == to.x {
@@ -112,10 +126,10 @@ impl LineGrid {
             for y in top..=bottom {
                 let point = Point { x: from.x, y };
                 if y > top {
-                    self.connect(point, LineCell::UP);
+                    self.connect(point, LineCell::UP, route_index);
                 }
                 if y < bottom {
-                    self.connect(point, LineCell::DOWN);
+                    self.connect(point, LineCell::DOWN, route_index);
                 }
             }
         }
@@ -207,8 +221,12 @@ impl ErRenderer {
         }
     }
 
-    fn add_relationship_line(lines: &mut LineGrid, rel: &PositionedRelationship) {
-        lines.add_route(&rel.route);
+    fn add_relationship_line(
+        lines: &mut LineGrid,
+        route_index: usize,
+        rel: &PositionedRelationship,
+    ) {
+        lines.add_route(route_index, &rel.route);
     }
 
     /// Draw cardinality markers at each end of a relationship route.
@@ -334,8 +352,8 @@ impl ErRenderer {
         let mut canvas = AsciiCanvas::new(layout.width + 4, layout.height + extra + 1);
 
         let mut lines = LineGrid::new(canvas.width, canvas.height);
-        for rel in &layout.relationships {
-            Self::add_relationship_line(&mut lines, rel);
+        for (index, rel) in layout.relationships.iter().enumerate() {
+            Self::add_relationship_line(&mut lines, index, rel);
         }
         lines.paint(&mut canvas);
 
@@ -536,31 +554,34 @@ mod tests {
     }
 
     #[test]
-    fn test_line_grid_renders_crossing_joint() {
+    fn test_line_grid_gaps_different_route_crossing() {
         let mut lines = LineGrid::new(5, 5);
-        lines.add_route(&[Point { x: 0, y: 2 }, Point { x: 4, y: 2 }]);
-        lines.add_route(&[Point { x: 2, y: 0 }, Point { x: 2, y: 4 }]);
+        lines.add_route(0, &[Point { x: 0, y: 2 }, Point { x: 4, y: 2 }]);
+        lines.add_route(1, &[Point { x: 2, y: 0 }, Point { x: 2, y: 4 }]);
 
-        assert_eq!(lines.cells[2][2].to_char(), Some('┼'));
+        assert_eq!(lines.cells[2][2].to_char(), Some(' '));
     }
 
     #[test]
-    fn test_line_grid_renders_tee_joint() {
+    fn test_line_grid_gaps_different_route_tee() {
         let mut lines = LineGrid::new(5, 5);
-        lines.add_route(&[Point { x: 0, y: 2 }, Point { x: 4, y: 2 }]);
-        lines.add_route(&[Point { x: 2, y: 0 }, Point { x: 2, y: 2 }]);
+        lines.add_route(0, &[Point { x: 0, y: 2 }, Point { x: 4, y: 2 }]);
+        lines.add_route(1, &[Point { x: 2, y: 0 }, Point { x: 2, y: 2 }]);
 
-        assert_eq!(lines.cells[2][2].to_char(), Some('┴'));
+        assert_eq!(lines.cells[2][2].to_char(), Some(' '));
     }
 
     #[test]
     fn test_line_grid_renders_corner_joint() {
         let mut lines = LineGrid::new(5, 5);
-        lines.add_route(&[
-            Point { x: 0, y: 2 },
-            Point { x: 2, y: 2 },
-            Point { x: 2, y: 4 },
-        ]);
+        lines.add_route(
+            0,
+            &[
+                Point { x: 0, y: 2 },
+                Point { x: 2, y: 2 },
+                Point { x: 2, y: 4 },
+            ],
+        );
 
         assert_eq!(lines.cells[2][2].to_char(), Some('┐'));
     }
