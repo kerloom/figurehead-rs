@@ -14,6 +14,124 @@ use crate::core::{AsciiCanvas, BoxChars, CharacterSet};
 /// ER diagram renderer.
 pub struct ErRenderer;
 
+#[derive(Debug, Clone, Copy, Default)]
+struct LineCell {
+    directions: u8,
+}
+
+impl LineCell {
+    const LEFT: u8 = 0b0001;
+    const RIGHT: u8 = 0b0010;
+    const UP: u8 = 0b0100;
+    const DOWN: u8 = 0b1000;
+
+    fn connect(&mut self, direction: u8) {
+        self.directions |= direction;
+    }
+
+    fn to_char(self) -> Option<char> {
+        let d = self.directions;
+        match d {
+            0 => None,
+            d if d == (Self::LEFT | Self::RIGHT | Self::UP | Self::DOWN) => Some('┼'),
+            d if d == Self::LEFT || d == Self::RIGHT || d == (Self::LEFT | Self::RIGHT) => {
+                Some('─')
+            }
+            d if d == Self::UP || d == Self::DOWN || d == (Self::UP | Self::DOWN) => Some('│'),
+            d if d == (Self::RIGHT | Self::DOWN) => Some('┌'),
+            d if d == (Self::LEFT | Self::DOWN) => Some('┐'),
+            d if d == (Self::RIGHT | Self::UP) => Some('└'),
+            d if d == (Self::LEFT | Self::UP) => Some('┘'),
+            d if d == (Self::LEFT | Self::RIGHT | Self::DOWN) => Some('┬'),
+            d if d == (Self::LEFT | Self::RIGHT | Self::UP) => Some('┴'),
+            d if d == (Self::UP | Self::DOWN | Self::RIGHT) => Some('├'),
+            d if d == (Self::UP | Self::DOWN | Self::LEFT) => Some('┤'),
+            _ => Some('┼'),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct LineGrid {
+    width: usize,
+    height: usize,
+    cells: Vec<Vec<LineCell>>,
+}
+
+impl LineGrid {
+    fn new(width: usize, height: usize) -> Self {
+        let width = width.max(1);
+        let height = height.max(1);
+        Self {
+            width,
+            height,
+            cells: vec![vec![LineCell::default(); width]; height],
+        }
+    }
+
+    fn ensure_size(&mut self, min_width: usize, min_height: usize) {
+        if min_width > self.width {
+            for row in &mut self.cells {
+                row.resize(min_width, LineCell::default());
+            }
+            self.width = min_width;
+        }
+        if min_height > self.height {
+            let extra_rows = min_height - self.height;
+            self.cells
+                .extend((0..extra_rows).map(|_| vec![LineCell::default(); self.width]));
+            self.height = min_height;
+        }
+    }
+
+    fn connect(&mut self, point: Point, direction: u8) {
+        self.ensure_size(point.x + 1, point.y + 1);
+        self.cells[point.y][point.x].connect(direction);
+    }
+
+    fn add_route(&mut self, route: &[Point]) {
+        for pair in route.windows(2) {
+            self.add_segment(pair[0], pair[1]);
+        }
+    }
+
+    fn add_segment(&mut self, from: Point, to: Point) {
+        if from.y == to.y {
+            let (left, right) = sort_pair(from.x, to.x);
+            for x in left..=right {
+                let point = Point { x, y: from.y };
+                if x > left {
+                    self.connect(point, LineCell::LEFT);
+                }
+                if x < right {
+                    self.connect(point, LineCell::RIGHT);
+                }
+            }
+        } else if from.x == to.x {
+            let (top, bottom) = sort_pair(from.y, to.y);
+            for y in top..=bottom {
+                let point = Point { x: from.x, y };
+                if y > top {
+                    self.connect(point, LineCell::UP);
+                }
+                if y < bottom {
+                    self.connect(point, LineCell::DOWN);
+                }
+            }
+        }
+    }
+
+    fn paint(&self, canvas: &mut AsciiCanvas) {
+        for (y, row) in self.cells.iter().enumerate() {
+            for (x, cell) in row.iter().enumerate() {
+                if let Some(c) = cell.to_char() {
+                    canvas.set_char(x, y, c);
+                }
+            }
+        }
+    }
+}
+
 impl ErRenderer {
     pub fn new() -> Self {
         Self
@@ -89,17 +207,12 @@ impl ErRenderer {
         }
     }
 
-    /// Draw the relationship line with cardinality markers at each end.
-    fn draw_relationship_line(&self, canvas: &mut AsciiCanvas, rel: &PositionedRelationship) {
-        for pair in rel.route.windows(2) {
-            Self::draw_segment(canvas, pair[0], pair[1]);
-        }
+    fn add_relationship_line(lines: &mut LineGrid, rel: &PositionedRelationship) {
+        lines.add_route(&rel.route);
+    }
 
-        for triple in rel.route.windows(3) {
-            let c = Self::corner_char(triple[0], triple[1], triple[2]);
-            canvas.set_char(triple[1].x, triple[1].y, c);
-        }
-
+    /// Draw cardinality markers at each end of a relationship route.
+    fn draw_relationship_markers(canvas: &mut AsciiCanvas, rel: &PositionedRelationship) {
         Self::draw_marker(canvas, rel.route[0], rel.from_side, rel.from_cardinality);
         Self::draw_marker(
             canvas,
@@ -107,54 +220,6 @@ impl ErRenderer {
             rel.to_side,
             rel.to_cardinality,
         );
-    }
-
-    fn draw_segment(canvas: &mut AsciiCanvas, from: Point, to: Point) {
-        if from.y == to.y {
-            let (left, right) = sort_pair(from.x, to.x);
-            for x in left..=right {
-                Self::set_line_char(canvas, x, from.y, '─');
-            }
-        } else if from.x == to.x {
-            let (top, bottom) = sort_pair(from.y, to.y);
-            for y in top..=bottom {
-                Self::set_line_char(canvas, from.x, y, '│');
-            }
-        }
-    }
-
-    fn set_line_char(canvas: &mut AsciiCanvas, x: usize, y: usize, c: char) {
-        let existing = canvas.get_char(x, y);
-        if existing == ' ' || existing == c {
-            canvas.set_char(x, y, c);
-        } else if matches!(
-            existing,
-            '─' | '│' | '┌' | '┐' | '└' | '┘' | '┬' | '┴' | '├' | '┤' | '┼'
-        ) {
-            canvas.set_char(x, y, '┼');
-        }
-    }
-
-    fn corner_char(prev: Point, curr: Point, next: Point) -> char {
-        let left = prev.x < curr.x || next.x < curr.x;
-        let right = prev.x > curr.x || next.x > curr.x;
-        let up = prev.y < curr.y || next.y < curr.y;
-        let down = prev.y > curr.y || next.y > curr.y;
-
-        match (left, right, up, down) {
-            (true, true, true, true) => '┼',
-            (true, true, true, false) => '┴',
-            (true, true, false, true) => '┬',
-            (true, false, true, true) => '┤',
-            (false, true, true, true) => '├',
-            (false, true, false, true) => '┌',
-            (true, false, false, true) => '┐',
-            (false, true, true, false) => '└',
-            (true, false, true, false) => '┘',
-            (true, true, false, false) => '─',
-            (false, false, true, true) => '│',
-            _ => '┼',
-        }
     }
 
     fn draw_marker(canvas: &mut AsciiCanvas, point: Point, side: PortSide, card: Cardinality) {
@@ -268,11 +333,17 @@ impl ErRenderer {
         };
         let mut canvas = AsciiCanvas::new(layout.width + 4, layout.height + extra + 1);
 
+        let mut lines = LineGrid::new(canvas.width, canvas.height);
         for rel in &layout.relationships {
-            self.draw_relationship_line(&mut canvas, rel);
+            Self::add_relationship_line(&mut lines, rel);
         }
+        lines.paint(&mut canvas);
+
         for entity in &layout.entities {
             self.draw_entity(&mut canvas, entity);
+        }
+        for rel in &layout.relationships {
+            Self::draw_relationship_markers(&mut canvas, rel);
         }
         for rel in &layout.relationships {
             self.draw_relationship_label(&mut canvas, rel);
@@ -462,6 +533,36 @@ mod tests {
             result.contains("||") || result.contains("}o"),
             "Expected side-by-side vertical port markers, got:\n{result}"
         );
+    }
+
+    #[test]
+    fn test_line_grid_renders_crossing_joint() {
+        let mut lines = LineGrid::new(5, 5);
+        lines.add_route(&[Point { x: 0, y: 2 }, Point { x: 4, y: 2 }]);
+        lines.add_route(&[Point { x: 2, y: 0 }, Point { x: 2, y: 4 }]);
+
+        assert_eq!(lines.cells[2][2].to_char(), Some('┼'));
+    }
+
+    #[test]
+    fn test_line_grid_renders_tee_joint() {
+        let mut lines = LineGrid::new(5, 5);
+        lines.add_route(&[Point { x: 0, y: 2 }, Point { x: 4, y: 2 }]);
+        lines.add_route(&[Point { x: 2, y: 0 }, Point { x: 2, y: 2 }]);
+
+        assert_eq!(lines.cells[2][2].to_char(), Some('┴'));
+    }
+
+    #[test]
+    fn test_line_grid_renders_corner_joint() {
+        let mut lines = LineGrid::new(5, 5);
+        lines.add_route(&[
+            Point { x: 0, y: 2 },
+            Point { x: 2, y: 2 },
+            Point { x: 2, y: 4 },
+        ]);
+
+        assert_eq!(lines.cells[2][2].to_char(), Some('┐'));
     }
 
     // --- Label lane tests ---
