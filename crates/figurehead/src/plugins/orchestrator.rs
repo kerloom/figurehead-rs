@@ -12,6 +12,7 @@ use crate::plugins::class::ClassDatabase;
 use crate::plugins::er::ErDatabase;
 use crate::plugins::flowchart::FlowchartDatabase;
 use crate::plugins::gitgraph::GitGraphDatabase;
+use crate::plugins::pie::PieDatabase;
 use crate::plugins::sequence::SequenceDatabase;
 use crate::plugins::state::StateDatabase;
 
@@ -35,6 +36,8 @@ pub struct Orchestrator {
     er_renderer: Option<crate::plugins::er::ErRenderer>,
     state_parser: Option<crate::plugins::state::StateParser>,
     state_renderer: Option<crate::plugins::state::StateRenderer>,
+    pie_parser: Option<crate::plugins::pie::PieParser>,
+    pie_renderer: Option<crate::plugins::pie::PieRenderer>,
 }
 
 impl Orchestrator {
@@ -55,6 +58,8 @@ impl Orchestrator {
             er_renderer: None,
             state_parser: None,
             state_renderer: None,
+            pie_parser: None,
+            pie_renderer: None,
         }
     }
 
@@ -85,6 +90,8 @@ impl Orchestrator {
             er_renderer: None,
             state_parser: None,
             state_renderer: None,
+            pie_parser: None,
+            pie_renderer: None,
         }
     }
 
@@ -115,6 +122,8 @@ impl Orchestrator {
             er_renderer: Some(crate::plugins::er::ErRenderer::new()),
             state_parser: Some(crate::plugins::state::StateParser::new()),
             state_renderer: Some(crate::plugins::state::StateRenderer::new()),
+            pie_parser: Some(crate::plugins::pie::PieParser::new()),
+            pie_renderer: Some(crate::plugins::pie::PieRenderer::new()),
         }
     }
 
@@ -129,6 +138,7 @@ impl Orchestrator {
         use crate::plugins::er::ErDetector;
         use crate::plugins::flowchart::FlowchartDetector;
         use crate::plugins::gitgraph::GitGraphDetector;
+        use crate::plugins::pie::PieDetector;
         use crate::plugins::sequence::SequenceDetector;
         use crate::plugins::state::StateDetector;
         self.register_detector("flowchart".to_string(), Box::new(FlowchartDetector::new()));
@@ -137,6 +147,7 @@ impl Orchestrator {
         self.register_detector("class".to_string(), Box::new(ClassDetector::new()));
         self.register_detector("er".to_string(), Box::new(ErDetector::new()));
         self.register_detector("state".to_string(), Box::new(StateDetector::new()));
+        self.register_detector("pie".to_string(), Box::new(PieDetector::new()));
         self
     }
 
@@ -211,6 +222,7 @@ impl Orchestrator {
             "class" => self.process_class(input),
             "er" => self.process_er(input),
             "state" => self.process_state(input),
+            "pie" => self.process_pie(input),
             _ => {
                 warn!(diagram_type, "Unsupported diagram type");
                 Err(anyhow::anyhow!(
@@ -521,6 +533,46 @@ impl Orchestrator {
         drop(_render_enter);
 
         info!("State diagram processing completed successfully");
+        Ok(canvas)
+    }
+
+    /// Process pie chart input directly (skip detection)
+    ///
+    /// Useful when the caller already knows the diagram type.
+    pub fn process_pie(&self, input: &str) -> Result<String> {
+        let pie_span = span!(Level::INFO, "process_pie", input_len = input.len());
+        let _enter = pie_span.enter();
+
+        info!("Processing pie chart");
+
+        let parse_span = span!(Level::DEBUG, "pipeline_parse");
+        let _parse_enter = parse_span.enter();
+        let parser = self
+            .pie_parser
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No pie parser available"))?;
+
+        let mut database = PieDatabase::new();
+        parser.parse(input, &mut database)?;
+        debug!(
+            slice_count = database.slice_count(),
+            total = database.total(),
+            "Parsing completed"
+        );
+        drop(_parse_enter);
+
+        let render_span = span!(Level::DEBUG, "pipeline_render");
+        let _render_enter = render_span.enter();
+        let renderer = self
+            .pie_renderer
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No pie renderer available"))?;
+
+        let canvas = renderer.render(&database)?;
+        debug!(output_len = canvas.len(), "Rendering completed");
+        drop(_render_enter);
+
+        info!("Pie chart processing completed successfully");
         Ok(canvas)
     }
 }

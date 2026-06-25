@@ -8,6 +8,7 @@ pub mod er;
 pub mod flowchart;
 pub mod gitgraph;
 pub mod orchestrator;
+pub mod pie;
 pub mod sequence;
 pub mod state;
 
@@ -16,5 +17,6 @@ pub use er::*;
 pub use flowchart::*;
 pub use gitgraph::*;
 pub use orchestrator::*;
+pub use pie::*;
 pub use sequence::*;
 pub use state::*;

@@ -53,6 +53,7 @@ pub mod prelude {
         FlowchartDatabase, FlowchartDetector, FlowchartLayoutAlgorithm, FlowchartParser,
         FlowchartRenderer,
     };
+    pub use crate::plugins::pie::{PieDatabase, PieDetector, PieParser, PieRenderer, PieSlice};
 }
 
 /// Render Mermaid flowchart syntax to ASCII art
@@ -228,6 +229,21 @@ mod tests {
         assert!(!output.is_empty());
         assert!(output.contains("Alice"));
         assert!(output.contains("Bob"));
+    }
+
+    #[test]
+    fn test_render_pie() {
+        let input = r#"pie showData title Pets adopted by volunteers
+    "Dogs" : 386
+    "Cats" : 85
+    "Rats" : 15"#;
+        let result = render(input);
+        assert!(result.is_ok(), "render failed: {:?}", result.err());
+        let output = result.unwrap();
+        assert!(output.contains("Pets adopted by volunteers"));
+        assert!(output.contains("Dogs"));
+        assert!(output.contains("Cats"));
+        assert!(output.contains("386"));
     }
 
     #[test]
