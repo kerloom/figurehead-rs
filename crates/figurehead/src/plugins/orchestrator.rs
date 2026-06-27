@@ -835,6 +835,23 @@ mod tests {
     }
 
     #[test]
+    fn test_process_pie_without_color_config() {
+        let config = RenderConfig::default().with_color(false);
+        let orchestrator = Orchestrator::all_plugins(config);
+
+        let input = r#"pie
+    "Dogs" : 386
+    "Cats" : 85"#;
+        let result = orchestrator.process_pie(input);
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(!output.contains("\x1b["));
+        assert!(output.contains("1 Dogs"));
+        assert!(output.contains("2 Cats"));
+    }
+
+    #[test]
     fn test_process_class() {
         use crate::plugins::class::ClassDetector;
 

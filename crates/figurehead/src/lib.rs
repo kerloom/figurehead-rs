@@ -79,7 +79,7 @@ pub mod prelude {
 pub fn render(input: &str) -> anyhow::Result<String> {
     use crate::plugins::orchestrator::Orchestrator;
 
-    let mut orchestrator = Orchestrator::with_all_plugins();
+    let mut orchestrator = Orchestrator::all_plugins(RenderConfig::default().with_color(true));
     orchestrator.register_default_detectors();
     orchestrator.process(input)
 }

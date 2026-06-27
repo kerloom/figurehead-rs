@@ -172,6 +172,11 @@ impl ErDatabase {
     }
 
     pub fn add_entity(&mut self, entity: Entity) -> Result<()> {
+        if let Some(existing) = self.get_entity_mut(&entity.name) {
+            *existing = entity;
+            return Ok(());
+        }
+
         self.entities.push(entity);
         Ok(())
     }
@@ -345,6 +350,21 @@ mod tests {
         assert_eq!(db.entity_count(), 2);
         assert!(db.get_entity("A").is_some());
         assert!(db.get_entity("C").is_none());
+    }
+
+    #[test]
+    fn test_database_add_entity_replaces_forward_reference_placeholder() {
+        let mut db = ErDatabase::new();
+        db.get_or_create_entity("A");
+
+        let mut entity = Entity::new("A").with_alias("Alias A");
+        entity.add_attribute(Attribute::new("Id", "int").with_key(KeyKind::Pk));
+        db.add_entity(entity).unwrap();
+
+        assert_eq!(db.entity_count(), 1);
+        let entity = db.get_entity("A").unwrap();
+        assert_eq!(entity.display_name(), "Alias A");
+        assert_eq!(entity.attributes.len(), 1);
     }
 
     #[test]

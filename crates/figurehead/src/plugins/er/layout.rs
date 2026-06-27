@@ -32,6 +32,7 @@ pub enum PortSide {
 /// Positioned entity box for rendering.
 #[derive(Debug, Clone)]
 pub struct PositionedEntity {
+    pub entity_name: String,
     pub name: String,
     pub x: usize,
     pub y: usize,
@@ -195,6 +196,7 @@ impl ErLayoutAlgorithm {
             }
 
             positioned.push(PositionedEntity {
+                entity_name: entity.name.clone(),
                 name: entity.display_name().to_string(),
                 x,
                 y,
@@ -214,8 +216,8 @@ impl ErLayoutAlgorithm {
 
         let mut positioned_rels = Vec::new();
         for rel in database.relationships() {
-            let from = positioned.iter().find(|e| e.name == rel.from);
-            let to = positioned.iter().find(|e| e.name == rel.to);
+            let from = positioned.iter().find(|e| e.entity_name == rel.from);
+            let to = positioned.iter().find(|e| e.entity_name == rel.to);
 
             if let (Some(from), Some(to)) = (from, to) {
                 let (from_side, to_side) = Self::choose_ports(from, to);
@@ -478,6 +480,31 @@ mod tests {
         let result = layout.layout(&db).unwrap();
 
         assert_eq!(result.entities[0].name, "Customer");
+    }
+
+    #[test]
+    fn test_aliased_entities_keep_relationships() {
+        let mut db = ErDatabase::new();
+        db.add_entity(Entity::new("PERSON").with_alias("Customer"))
+            .unwrap();
+        db.add_entity(Entity::new("ORDER").with_alias("Purchase"))
+            .unwrap();
+        db.add_relationship(Relationship::new(
+            "PERSON",
+            "ORDER",
+            Cardinality::ExactlyOne,
+            Cardinality::ZeroOrMore,
+        ))
+        .unwrap();
+
+        let layout = ErLayoutAlgorithm::new();
+        let result = layout.layout(&db).unwrap();
+
+        assert_eq!(result.entities[0].name, "Customer");
+        assert_eq!(result.entities[1].name, "Purchase");
+        assert_eq!(result.relationships.len(), 1);
+        assert_eq!(result.relationships[0].from_entity, "PERSON");
+        assert_eq!(result.relationships[0].to_entity, "ORDER");
     }
 
     #[test]

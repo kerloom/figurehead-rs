@@ -17,8 +17,10 @@ impl PieRenderer {
         Self { color: true }
     }
 
-    pub fn with_config(_config: RenderConfig) -> Self {
-        Self::new()
+    pub fn with_config(config: RenderConfig) -> Self {
+        Self {
+            color: config.color,
+        }
     }
 
     pub fn with_color(color: bool) -> Self {
@@ -187,6 +189,20 @@ mod tests {
 
         assert!(output.contains("\x1b[31m1\x1b[0m"));
         assert!(output.contains("\x1b[32m2\x1b[0m"));
+    }
+
+    #[test]
+    fn test_render_config_can_disable_color() {
+        let mut db = PieDatabase::new();
+        db.add_slice(PieSlice::new("Dogs", 386.0)).unwrap();
+        db.add_slice(PieSlice::new("Cats", 85.0)).unwrap();
+
+        let renderer = PieRenderer::with_config(RenderConfig::default().with_color(false));
+        let output = renderer.render(&db).unwrap();
+
+        assert!(!output.contains("\x1b["));
+        assert!(output.contains("1 Dogs"));
+        assert!(output.contains("2 Cats"));
     }
 
     #[test]
