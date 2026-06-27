@@ -9,8 +9,10 @@ use tracing::{debug, info, span, trace, warn, Level};
 
 use crate::core::{Database, Detector, Parser, RenderConfig, Renderer};
 use crate::plugins::class::ClassDatabase;
+use crate::plugins::er::ErDatabase;
 use crate::plugins::flowchart::FlowchartDatabase;
 use crate::plugins::gitgraph::GitGraphDatabase;
+use crate::plugins::pie::PieDatabase;
 use crate::plugins::sequence::SequenceDatabase;
 use crate::plugins::state::StateDatabase;
 
@@ -30,8 +32,12 @@ pub struct Orchestrator {
     sequence_renderer: Option<crate::plugins::sequence::SequenceRenderer>,
     class_parser: Option<crate::plugins::class::ClassParser>,
     class_renderer: Option<crate::plugins::class::ClassRenderer>,
+    er_parser: Option<crate::plugins::er::ErParser>,
+    er_renderer: Option<crate::plugins::er::ErRenderer>,
     state_parser: Option<crate::plugins::state::StateParser>,
     state_renderer: Option<crate::plugins::state::StateRenderer>,
+    pie_parser: Option<crate::plugins::pie::PieParser>,
+    pie_renderer: Option<crate::plugins::pie::PieRenderer>,
 }
 
 impl Orchestrator {
@@ -48,8 +54,12 @@ impl Orchestrator {
             sequence_renderer: None,
             class_parser: None,
             class_renderer: None,
+            er_parser: None,
+            er_renderer: None,
             state_parser: None,
             state_renderer: None,
+            pie_parser: None,
+            pie_renderer: None,
         }
     }
 
@@ -76,8 +86,12 @@ impl Orchestrator {
             sequence_renderer: None,
             class_parser: None,
             class_renderer: None,
+            er_parser: None,
+            er_renderer: None,
             state_parser: None,
             state_renderer: None,
+            pie_parser: None,
+            pie_renderer: None,
         }
     }
 
@@ -104,8 +118,12 @@ impl Orchestrator {
             sequence_renderer: Some(crate::plugins::sequence::SequenceRenderer::new()),
             class_parser: Some(crate::plugins::class::ClassParser::new()),
             class_renderer: Some(crate::plugins::class::ClassRenderer::new()),
+            er_parser: Some(crate::plugins::er::ErParser::new()),
+            er_renderer: Some(crate::plugins::er::ErRenderer::new()),
             state_parser: Some(crate::plugins::state::StateParser::new()),
             state_renderer: Some(crate::plugins::state::StateRenderer::new()),
+            pie_parser: Some(crate::plugins::pie::PieParser::new()),
+            pie_renderer: Some(crate::plugins::pie::PieRenderer::with_config(config)),
         }
     }
 
@@ -117,15 +135,19 @@ impl Orchestrator {
     /// Register the default set of detectors (flowchart, gitgraph, sequence, class, state)
     pub fn register_default_detectors(&mut self) -> &mut Self {
         use crate::plugins::class::ClassDetector;
+        use crate::plugins::er::ErDetector;
         use crate::plugins::flowchart::FlowchartDetector;
         use crate::plugins::gitgraph::GitGraphDetector;
+        use crate::plugins::pie::PieDetector;
         use crate::plugins::sequence::SequenceDetector;
         use crate::plugins::state::StateDetector;
         self.register_detector("flowchart".to_string(), Box::new(FlowchartDetector::new()));
         self.register_detector("gitgraph".to_string(), Box::new(GitGraphDetector::new()));
         self.register_detector("sequence".to_string(), Box::new(SequenceDetector::new()));
         self.register_detector("class".to_string(), Box::new(ClassDetector::new()));
+        self.register_detector("er".to_string(), Box::new(ErDetector::new()));
         self.register_detector("state".to_string(), Box::new(StateDetector::new()));
+        self.register_detector("pie".to_string(), Box::new(PieDetector::new()));
         self
     }
 
@@ -198,7 +220,9 @@ impl Orchestrator {
             "gitgraph" => self.process_gitgraph(input),
             "sequence" => self.process_sequence(input),
             "class" => self.process_class(input),
+            "er" => self.process_er(input),
             "state" => self.process_state(input),
+            "pie" => self.process_pie(input),
             _ => {
                 warn!(diagram_type, "Unsupported diagram type");
                 Err(anyhow::anyhow!(
@@ -430,6 +454,46 @@ impl Orchestrator {
         Ok(canvas)
     }
 
+    /// Process entity-relationship diagram input directly (skip detection)
+    ///
+    /// Useful when the caller already knows the diagram type.
+    pub fn process_er(&self, input: &str) -> Result<String> {
+        let er_span = span!(Level::INFO, "process_er", input_len = input.len());
+        let _enter = er_span.enter();
+
+        info!("Processing ER diagram");
+
+        let parse_span = span!(Level::DEBUG, "pipeline_parse");
+        let _parse_enter = parse_span.enter();
+        let parser = self
+            .er_parser
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No ER parser available"))?;
+
+        let mut database = ErDatabase::new();
+        parser.parse(input, &mut database)?;
+        debug!(
+            entity_count = database.entity_count(),
+            relationship_count = database.relationship_count(),
+            "Parsing completed"
+        );
+        drop(_parse_enter);
+
+        let render_span = span!(Level::DEBUG, "pipeline_render");
+        let _render_enter = render_span.enter();
+        let renderer = self
+            .er_renderer
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No ER renderer available"))?;
+
+        let canvas = renderer.render_database(&database)?;
+        debug!(output_len = canvas.len(), "Rendering completed");
+        drop(_render_enter);
+
+        info!("ER diagram processing completed successfully");
+        Ok(canvas)
+    }
+
     /// Process state diagram input directly (skip detection)
     ///
     /// Useful when the caller already knows the diagram type.
@@ -469,6 +533,46 @@ impl Orchestrator {
         drop(_render_enter);
 
         info!("State diagram processing completed successfully");
+        Ok(canvas)
+    }
+
+    /// Process pie chart input directly (skip detection)
+    ///
+    /// Useful when the caller already knows the diagram type.
+    pub fn process_pie(&self, input: &str) -> Result<String> {
+        let pie_span = span!(Level::INFO, "process_pie", input_len = input.len());
+        let _enter = pie_span.enter();
+
+        info!("Processing pie chart");
+
+        let parse_span = span!(Level::DEBUG, "pipeline_parse");
+        let _parse_enter = parse_span.enter();
+        let parser = self
+            .pie_parser
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No pie parser available"))?;
+
+        let mut database = PieDatabase::new();
+        parser.parse(input, &mut database)?;
+        debug!(
+            slice_count = database.slice_count(),
+            total = database.total(),
+            "Parsing completed"
+        );
+        drop(_parse_enter);
+
+        let render_span = span!(Level::DEBUG, "pipeline_render");
+        let _render_enter = render_span.enter();
+        let renderer = self
+            .pie_renderer
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No pie renderer available"))?;
+
+        let canvas = renderer.render(&database)?;
+        debug!(output_len = canvas.len(), "Rendering completed");
+        drop(_render_enter);
+
+        info!("Pie chart processing completed successfully");
         Ok(canvas)
     }
 }
@@ -712,6 +816,39 @@ mod tests {
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn test_process_pie_with_color_config() {
+        let config = RenderConfig::default().with_color(true);
+        let orchestrator = Orchestrator::all_plugins(config);
+
+        let input = r#"pie
+    "Dogs" : 386
+    "Cats" : 85"#;
+        let result = orchestrator.process_pie(input);
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("\x1b[31m1\x1b[0m"));
+        assert!(output.contains("\x1b[32m2\x1b[0m"));
+    }
+
+    #[test]
+    fn test_process_pie_without_color_config() {
+        let config = RenderConfig::default().with_color(false);
+        let orchestrator = Orchestrator::all_plugins(config);
+
+        let input = r#"pie
+    "Dogs" : 386
+    "Cats" : 85"#;
+        let result = orchestrator.process_pie(input);
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(!output.contains("\x1b["));
+        assert!(output.contains("1 Dogs"));
+        assert!(output.contains("2 Cats"));
     }
 
     #[test]
