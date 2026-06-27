@@ -123,7 +123,7 @@ impl Orchestrator {
             state_parser: Some(crate::plugins::state::StateParser::new()),
             state_renderer: Some(crate::plugins::state::StateRenderer::new()),
             pie_parser: Some(crate::plugins::pie::PieParser::new()),
-            pie_renderer: Some(crate::plugins::pie::PieRenderer::new()),
+            pie_renderer: Some(crate::plugins::pie::PieRenderer::with_config(config)),
         }
     }
 
@@ -816,6 +816,22 @@ mod tests {
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn test_process_pie_with_color_config() {
+        let config = RenderConfig::default().with_color(true);
+        let orchestrator = Orchestrator::all_plugins(config);
+
+        let input = r#"pie
+    "Dogs" : 386
+    "Cats" : 85"#;
+        let result = orchestrator.process_pie(input);
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("\x1b[31m1\x1b[0m"));
+        assert!(output.contains("\x1b[32m2\x1b[0m"));
     }
 
     #[test]

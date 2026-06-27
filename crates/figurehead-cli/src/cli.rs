@@ -278,16 +278,16 @@ impl FigureheadApp {
             eprintln!("Read {} bytes of input", content.len());
         }
 
-        // Apply style and diamond options to renderer
-        let config = Self::build_config(style, diamond);
+        let should_colorize = self.should_colorize(&output, color);
+
+        // Apply style, diamond, and color options to renderer
+        let config = Self::build_config(style, diamond).with_color(should_colorize);
         let mut orchestrator = Orchestrator::all_plugins(config);
         orchestrator.register_default_detectors();
         self.orchestrator = orchestrator;
 
         // Process the diagram
         // For flowcharts, we can get the database for proper style extraction
-        let should_colorize = self.should_colorize(&output, color);
-
         let (ascii_output, styles) = if skip_detection {
             // Direct flowchart processing - use database for styles
             let (output, db) = self
