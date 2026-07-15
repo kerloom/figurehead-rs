@@ -250,6 +250,14 @@ impl CoreParser<StateDatabase> for StateParser {
             }
         }
 
+        if let Some(note) = database
+            .notes()
+            .iter()
+            .find(|note| database.state_index(&note.state_id).is_none())
+        {
+            anyhow::bail!("Note references unknown state: {}", note.state_id);
+        }
+
         Ok(())
     }
 
@@ -372,7 +380,7 @@ stateDiagram-v2
     }
 
     #[test]
-    fn test_parses_notes_descriptions_and_choice() {
+    fn test_parses_notes_descriptions_and_special_states() {
         let parser = StateParser::new();
         let mut db = StateDatabase::new();
         parser
@@ -380,6 +388,8 @@ stateDiagram-v2
                 r#"stateDiagram-v2
     Pending: Waiting for review
     state Decision <<choice>>
+    state Parallel <<fork>>
+    state Complete <<join>>
     Pending --> Decision
     note right of Pending
         First line
@@ -392,8 +402,40 @@ stateDiagram-v2
 
         assert_eq!(db.get_node("Pending").unwrap().label, "Waiting for review");
         assert_eq!(db.get_node("Decision").unwrap().shape, NodeShape::Diamond);
+        assert_eq!(db.get_node("Parallel").unwrap().shape, NodeShape::Diamond);
+        assert_eq!(db.get_node("Complete").unwrap().shape, NodeShape::Diamond);
         assert_eq!(db.notes().len(), 2);
         assert_eq!(db.notes()[0].text, ["First line", "Second line"]);
         assert_eq!(db.notes()[1].side, NoteSide::Left);
+    }
+
+    #[test]
+    fn test_description_preserves_special_state_shape() {
+        let parser = StateParser::new();
+        let mut db = StateDatabase::new();
+        parser
+            .parse(
+                "stateDiagram-v2\nstate Decision <<choice>>\nDecision: Pick a path",
+                &mut db,
+            )
+            .unwrap();
+
+        let state = db.get_node("Decision").unwrap();
+        assert_eq!(state.label, "Pick a path");
+        assert_eq!(state.shape, NodeShape::Diamond);
+    }
+
+    #[test]
+    fn test_rejects_note_for_unknown_state() {
+        let parser = StateParser::new();
+        let mut db = StateDatabase::new();
+        let error = parser
+            .parse(
+                "stateDiagram-v2\nnote right of Missing: This should not disappear",
+                &mut db,
+            )
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "Note references unknown state: Missing");
     }
 }

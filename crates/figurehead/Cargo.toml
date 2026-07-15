@@ -33,7 +33,7 @@ proptest.workspace = true
 wasm-bindgen-test = "0.3"
 
 [features]
-default = ["flowchart"]
+default = ["flowchart", "state"]
 flowchart = []
 sequence = []
 class = []

@@ -10,6 +10,7 @@ pub mod gitgraph;
 pub mod orchestrator;
 pub mod pie;
 pub mod sequence;
+#[cfg(feature = "state")]
 pub mod state;
 
 pub use class::*;
@@ -19,4 +20,5 @@ pub use gitgraph::*;
 pub use orchestrator::*;
 pub use pie::*;
 pub use sequence::*;
+#[cfg(feature = "state")]
 pub use state::*;

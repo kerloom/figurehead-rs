@@ -14,6 +14,7 @@ use crate::plugins::flowchart::FlowchartDatabase;
 use crate::plugins::gitgraph::GitGraphDatabase;
 use crate::plugins::pie::PieDatabase;
 use crate::plugins::sequence::SequenceDatabase;
+#[cfg(feature = "state")]
 use crate::plugins::state::StateDatabase;
 
 /// Plugin orchestrator that coordinates the entire pipeline
@@ -34,7 +35,9 @@ pub struct Orchestrator {
     class_renderer: Option<crate::plugins::class::ClassRenderer>,
     er_parser: Option<crate::plugins::er::ErParser>,
     er_renderer: Option<crate::plugins::er::ErRenderer>,
+    #[cfg(feature = "state")]
     state_parser: Option<crate::plugins::state::StateParser>,
+    #[cfg(feature = "state")]
     state_renderer: Option<crate::plugins::state::StateRenderer>,
     pie_parser: Option<crate::plugins::pie::PieParser>,
     pie_renderer: Option<crate::plugins::pie::PieRenderer>,
@@ -56,7 +59,9 @@ impl Orchestrator {
             class_renderer: None,
             er_parser: None,
             er_renderer: None,
+            #[cfg(feature = "state")]
             state_parser: None,
+            #[cfg(feature = "state")]
             state_renderer: None,
             pie_parser: None,
             pie_renderer: None,
@@ -88,7 +93,9 @@ impl Orchestrator {
             class_renderer: None,
             er_parser: None,
             er_renderer: None,
+            #[cfg(feature = "state")]
             state_parser: None,
+            #[cfg(feature = "state")]
             state_renderer: None,
             pie_parser: None,
             pie_renderer: None,
@@ -120,7 +127,9 @@ impl Orchestrator {
             class_renderer: Some(crate::plugins::class::ClassRenderer::new()),
             er_parser: Some(crate::plugins::er::ErParser::new()),
             er_renderer: Some(crate::plugins::er::ErRenderer::new()),
+            #[cfg(feature = "state")]
             state_parser: Some(crate::plugins::state::StateParser::new()),
+            #[cfg(feature = "state")]
             state_renderer: Some(crate::plugins::state::StateRenderer::new()),
             pie_parser: Some(crate::plugins::pie::PieParser::new()),
             pie_renderer: Some(crate::plugins::pie::PieRenderer::with_config(config)),
@@ -140,12 +149,14 @@ impl Orchestrator {
         use crate::plugins::gitgraph::GitGraphDetector;
         use crate::plugins::pie::PieDetector;
         use crate::plugins::sequence::SequenceDetector;
+        #[cfg(feature = "state")]
         use crate::plugins::state::StateDetector;
         self.register_detector("flowchart".to_string(), Box::new(FlowchartDetector::new()));
         self.register_detector("gitgraph".to_string(), Box::new(GitGraphDetector::new()));
         self.register_detector("sequence".to_string(), Box::new(SequenceDetector::new()));
         self.register_detector("class".to_string(), Box::new(ClassDetector::new()));
         self.register_detector("er".to_string(), Box::new(ErDetector::new()));
+        #[cfg(feature = "state")]
         self.register_detector("state".to_string(), Box::new(StateDetector::new()));
         self.register_detector("pie".to_string(), Box::new(PieDetector::new()));
         self
@@ -221,6 +232,7 @@ impl Orchestrator {
             "sequence" => self.process_sequence(input),
             "class" => self.process_class(input),
             "er" => self.process_er(input),
+            #[cfg(feature = "state")]
             "state" => self.process_state(input),
             "pie" => self.process_pie(input),
             _ => {
@@ -497,6 +509,7 @@ impl Orchestrator {
     /// Process state diagram input directly (skip detection)
     ///
     /// Useful when the caller already knows the diagram type.
+    #[cfg(feature = "state")]
     pub fn process_state(&self, input: &str) -> Result<String> {
         let state_span = span!(Level::INFO, "process_state", input_len = input.len());
         let _enter = state_span.enter();

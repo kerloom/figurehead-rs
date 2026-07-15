@@ -167,7 +167,7 @@ impl StateRenderer {
         }
     }
 
-    /// Draw a single edge between two points with optional label
+    /// Draw a single edge between two points
     fn draw_single_edge(
         &self,
         canvas: &mut AsciiCanvas,
@@ -175,7 +175,6 @@ impl StateRenderer {
         from_y: usize,
         to_x: usize,
         to_y: usize,
-        _label: Option<&str>,
     ) {
         if from_y >= to_y {
             return;
@@ -285,6 +284,15 @@ impl StateRenderer {
             canvas.set_char(x, edge.from_y, line);
         }
         let arrow_x = if edge.from_x < edge.to_x { end } else { start };
+        let (top, bottom) = if edge.from_y < edge.to_y {
+            (edge.from_y, edge.to_y)
+        } else {
+            (edge.to_y, edge.from_y)
+        };
+        let vertical = if self.is_unicode() { '│' } else { '|' };
+        for y in (top + 1)..bottom {
+            canvas.set_char(arrow_x, y, vertical);
+        }
         canvas.set_char(arrow_x, edge.to_y, arrow);
     }
 
@@ -603,7 +611,6 @@ impl StateRenderer {
                         trans.from_y,
                         trans.to_x,
                         trans.to_y.saturating_sub(1),
-                        trans.label.as_deref(),
                     );
                 }
                 TransitionRoute::Backward => self.draw_backward_edge(&mut canvas, trans),
@@ -857,5 +864,29 @@ mod tests {
         let after_label = label_line.split_once("Retry fails again").unwrap().1;
         assert!(after_label.contains('─'));
         assert!(after_label.contains('│'));
+    }
+
+    #[test]
+    fn test_horizontal_edge_connects_different_rows() {
+        let renderer = StateRenderer::new();
+        let mut canvas = AsciiCanvas::new(12, 8);
+        let edge = PositionedTransition {
+            from_id: "Short".to_string(),
+            to_id: "Tall".to_string(),
+            label: None,
+            from_x: 2,
+            from_y: 2,
+            to_x: 8,
+            to_y: 5,
+            route: TransitionRoute::Horizontal,
+            lane: 0,
+        };
+
+        renderer.draw_horizontal_edge(&mut canvas, &edge);
+
+        assert_eq!(canvas.grid[2][7], '─');
+        assert_eq!(canvas.grid[3][7], '│');
+        assert_eq!(canvas.grid[4][7], '│');
+        assert_eq!(canvas.grid[5][7], '▶');
     }
 }

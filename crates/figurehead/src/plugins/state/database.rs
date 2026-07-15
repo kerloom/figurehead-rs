@@ -46,7 +46,9 @@ impl StateDatabase {
             .find(|existing| existing.id == state.id)
         {
             existing.label = state.label;
-            existing.shape = state.shape;
+            if existing.shape == NodeShape::Rectangle || state.shape != NodeShape::Rectangle {
+                existing.shape = state.shape;
+            }
         } else {
             self.states.push(state);
         }
