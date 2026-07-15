@@ -5,6 +5,19 @@
 use crate::core::{Database, EdgeData, NodeData, NodeShape};
 use anyhow::Result;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteSide {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateNote {
+    pub state_id: String,
+    pub side: NoteSide,
+    pub text: Vec<String>,
+}
+
 /// Internal ID for start terminal
 pub const START_TERMINAL: &str = "[*]_start";
 /// Internal ID for end terminal
@@ -15,6 +28,7 @@ pub const END_TERMINAL: &str = "[*]_end";
 pub struct StateDatabase {
     states: Vec<NodeData>,
     transitions: Vec<EdgeData>,
+    notes: Vec<StateNote>,
     has_start: bool,
     has_end: bool,
 }
@@ -26,11 +40,23 @@ impl StateDatabase {
 
     /// Add a state
     pub fn add_state(&mut self, state: NodeData) -> Result<()> {
-        // Don't add duplicates
-        if !self.states.iter().any(|s| s.id == state.id) {
+        if let Some(existing) = self
+            .states
+            .iter_mut()
+            .find(|existing| existing.id == state.id)
+        {
+            existing.label = state.label;
+            if existing.shape == NodeShape::Rectangle || state.shape != NodeShape::Rectangle {
+                existing.shape = state.shape;
+            }
+        } else {
             self.states.push(state);
         }
         Ok(())
+    }
+
+    pub fn add_note(&mut self, note: StateNote) {
+        self.notes.push(note);
     }
 
     /// Ensure a state exists (creates implicit state if needed)
@@ -99,6 +125,10 @@ impl StateDatabase {
         &self.transitions
     }
 
+    pub fn notes(&self) -> &[StateNote] {
+        &self.notes
+    }
+
     /// Get state count
     pub fn state_count(&self) -> usize {
         self.states.len()
@@ -118,6 +148,7 @@ impl StateDatabase {
     pub fn clear_all(&mut self) {
         self.states.clear();
         self.transitions.clear();
+        self.notes.clear();
     }
 }
 
