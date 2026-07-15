@@ -58,7 +58,7 @@ impl Diagram for PieDiagram {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use crate::core::{Database, Parser, Renderer};
+    use crate::core::{Database, Parser};
 
     #[test]
     fn test_full_pipeline() {
