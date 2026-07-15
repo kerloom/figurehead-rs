@@ -2,7 +2,7 @@
 //!
 //! Parses state diagram syntax into the database.
 
-use super::database::StateDatabase;
+use super::database::{NoteSide, StateDatabase, StateNote};
 use crate::core::{EdgeData, EdgeType, NodeData, NodeShape, Parser as CoreParser};
 use anyhow::Result;
 use chumsky::prelude::*;
@@ -139,6 +139,31 @@ impl StateParser {
     fn is_comment(&self, line: &str) -> bool {
         line.trim().starts_with("%%")
     }
+
+    fn parse_note_header(line: &str) -> Option<(NoteSide, &str, Option<&str>)> {
+        let rest = line.strip_prefix("note ")?;
+        let (side, rest) = if let Some(rest) = rest.strip_prefix("left of ") {
+            (NoteSide::Left, rest)
+        } else if let Some(rest) = rest.strip_prefix("right of ") {
+            (NoteSide::Right, rest)
+        } else {
+            return None;
+        };
+        let (state_id, text) = rest
+            .split_once(':')
+            .map_or((rest, None), |(id, text)| (id, Some(text.trim())));
+        Some((side, state_id.trim(), text))
+    }
+
+    fn parse_description(line: &str) -> Option<(&str, &str)> {
+        if line.contains("-->") || line.starts_with("note ") {
+            return None;
+        }
+        let (id, label) = line.split_once(':')?;
+        let id = id.trim();
+        let label = label.trim();
+        (!id.is_empty() && !label.is_empty()).then_some((id, label))
+    }
 }
 
 impl Default for StateParser {
@@ -149,15 +174,67 @@ impl Default for StateParser {
 
 impl CoreParser<StateDatabase> for StateParser {
     fn parse(&self, input: &str, database: &mut StateDatabase) -> Result<()> {
-        for line in input.lines() {
-            let trimmed = line.trim();
+        let lines: Vec<&str> = input.lines().collect();
+        let mut index = 0;
+        while index < lines.len() {
+            let trimmed = lines[index]
+                .split_once("%%")
+                .map_or(lines[index], |(before, _)| before)
+                .trim();
+            index += 1;
 
-            // Skip empty lines, comments, and header
             if trimmed.is_empty() || self.is_comment(trimmed) || self.is_header_line(trimmed) {
                 continue;
             }
 
-            // Try to parse the line
+            if let Some((side, state_id, inline_text)) = Self::parse_note_header(trimmed) {
+                let text = if let Some(text) = inline_text {
+                    vec![text.to_string()]
+                } else {
+                    let mut text = Vec::new();
+                    while index < lines.len() {
+                        let note_line = lines[index].trim();
+                        index += 1;
+                        if note_line == "end note" {
+                            break;
+                        }
+                        if !note_line.is_empty() {
+                            text.push(note_line.to_string());
+                        }
+                    }
+                    text
+                };
+                database.add_note(StateNote {
+                    state_id: state_id.to_string(),
+                    side,
+                    text,
+                });
+                continue;
+            }
+
+            if let Some(rest) = trimmed.strip_prefix("state ") {
+                let special_id = ["<<choice>>", "<<fork>>", "<<join>>"]
+                    .iter()
+                    .find_map(|marker| rest.strip_suffix(marker).map(str::trim));
+                if let Some(id) = special_id {
+                    database.add_state(NodeData::with_shape(id, id, NodeShape::Diamond))?;
+                    continue;
+                }
+                if !rest.is_empty()
+                    && rest
+                        .chars()
+                        .all(|character| character.is_alphanumeric() || character == '_')
+                {
+                    database.add_state(NodeData::new(rest, rest))?;
+                    continue;
+                }
+            }
+
+            if let Some((id, label)) = Self::parse_description(trimmed) {
+                database.add_state(NodeData::with_shape(id, label, NodeShape::Rectangle))?;
+                continue;
+            }
+
             match self.parse_statement(trimmed) {
                 Ok(Statement::StateDecl { id, label }) => {
                     database.add_state(NodeData::with_shape(&id, &label, NodeShape::Rectangle))?;
@@ -169,10 +246,7 @@ impl CoreParser<StateDatabase> for StateParser {
                     };
                     database.add_transition(edge)?;
                 }
-                Err(_) => {
-                    // Skip unparseable lines for now
-                    continue;
-                }
+                Err(_) => continue,
             }
         }
 
@@ -196,6 +270,7 @@ impl CoreParser<StateDatabase> for StateParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Database;
 
     #[test]
     fn test_parse_simple_transition() {
@@ -294,5 +369,31 @@ stateDiagram-v2
         assert!(parser.can_parse("stateDiagram-v2\n[*] --> Idle"));
         assert!(parser.can_parse("[*] --> Idle"));
         assert!(!parser.can_parse("graph TD\nA --> B"));
+    }
+
+    #[test]
+    fn test_parses_notes_descriptions_and_choice() {
+        let parser = StateParser::new();
+        let mut db = StateDatabase::new();
+        parser
+            .parse(
+                r#"stateDiagram-v2
+    Pending: Waiting for review
+    state Decision <<choice>>
+    Pending --> Decision
+    note right of Pending
+        First line
+        Second line
+    end note
+    note left of Decision: Pick a path"#,
+                &mut db,
+            )
+            .unwrap();
+
+        assert_eq!(db.get_node("Pending").unwrap().label, "Waiting for review");
+        assert_eq!(db.get_node("Decision").unwrap().shape, NodeShape::Diamond);
+        assert_eq!(db.notes().len(), 2);
+        assert_eq!(db.notes()[0].text, ["First line", "Second line"]);
+        assert_eq!(db.notes()[1].side, NoteSide::Left);
     }
 }
